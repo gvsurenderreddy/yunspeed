@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"container/list"
 	"encoding/binary"
@@ -19,21 +20,26 @@ type ICMP struct {
 }
 
 type StasticData struct {
-	Count         int
-	DurationList  *list.List
-	SendedPackets int
+	Host            string
+	Count           int32
+	DurationList    *list.List
+	SendedPackets   int32
+	min             int32
+	max             int32
+	avg             float32
+	lostPacketsRate float32
 }
 
 func (s *StasticData) PrintStasticData() {
-	var min, max, sum int64
+	var min, max, sum int32
 	if s.DurationList.Len() == 0 {
 		min, max, sum = 0, 0, 0
 	} else {
-		min, max, sum = s.DurationList.Front().Value.(int64), s.DurationList.Front().Value.(int64), int64(0)
+		min, max, sum = s.DurationList.Front().Value.(int32), s.DurationList.Front().Value.(int32), int32(0)
 	}
 
 	for ele := s.DurationList.Front(); ele != nil; ele = ele.Next() {
-		value := ele.Value.(int64)
+		value := ele.Value.(int32)
 		if max < value {
 			max = value
 		}
@@ -45,10 +51,16 @@ func (s *StasticData) PrintStasticData() {
 		sum += value
 	}
 
-	recvdPackets, lostPackets := s.DurationList.Len(), s.SendedPackets-s.DurationList.Len()
+	recvdPackets, lostPackets := s.DurationList.Len(), s.SendedPackets-int32(s.DurationList.Len())
+
+	s.min = min
+	s.max = max
+	s.avg = float32(sum) / float32(recvdPackets)
+	s.lostPacketsRate = float32(lostPackets) / float32(s.SendedPackets) * 100
+
 	fmt.Printf("%d packets transmitted, %d received, %.1f%% packet loss\n rtt min/avg/max = %d/%.1f/%d\n",
-		s.SendedPackets, recvdPackets, float32(lostPackets)/float32(s.SendedPackets)*100,
-		min, float32(sum)/float32(recvdPackets), max)
+		s.SendedPackets, recvdPackets, s.lostPacketsRate,
+		min, s.avg, max)
 }
 
 func sendICMPPacket(host string, count int) StasticData {
@@ -77,7 +89,8 @@ func sendICMPPacket(host string, count int) StasticData {
 	binary.Write(&buffer, binary.BigEndian, icmp)
 
 	var result StasticData
-	result.Count = count
+	result.Host = host
+	result.Count = int32(count)
 	result.DurationList = list.New()
 
 	fmt.Printf("\nPing %s (%s) 0 bytes of data\n", host, addr.IP.To16())
@@ -102,7 +115,7 @@ func sendICMPPacket(host string, count int) StasticData {
 
 		tEnd := time.Now()
 
-		duration := (tEnd.Sub(tNow).Nanoseconds() / (1000 * 1000))
+		duration := int32(tEnd.Sub(tNow).Nanoseconds() / (1000 * 1000))
 		fmt.Printf("from %s : time=%dms\n", addr.String(), duration)
 		result.DurationList.PushBack(duration)
 
@@ -114,14 +127,96 @@ func sendICMPPacket(host string, count int) StasticData {
 
 func main() {
 
-	host := "us1.vpnfax.com"
-	count := 4
+	argsLen := len(os.Args)
+	if argsLen < 2 {
+		fmt.Print(
+			"Please run with [super user] in terminal\n",
+			"Usage:\n",
+			"yunspeed hostListFilePath\n",
+			"for example: yunspeed /home/yuntivpns.txt\n")
+		os.Exit(1)
+	}
+	count := 10
 
+	hostFile := os.Args[1]
+
+	hosts, err := readHostFile(hostFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Read file error : %s", err.Error())
+	}
+
+	// fmt.Printf("hosts length : %d\n", len(hosts))
+
+	var chs []chan StasticData
+
+	for i := 0; i < len(hosts); i++ {
+		chs = append(chs, make(chan StasticData))
+		go pingHost(hosts[i], count, chs[i])
+	}
+
+	var datas []StasticData
+	for _, ch := range chs {
+		data := <-ch
+		// fmt.Printf("Result From : %s \n", data.Host)
+		datas = append(datas, data)
+	}
+
+	// fmt.Printf("result length : %d\n", len(datas))
+
+	timeThreshold := 200
+	allBelowThreshold := true
+	recommendIndex := 0
+	minTtl := datas[0].avg
+
+	for index := 0; index < len(datas); index++ {
+		data := datas[index]
+		if data.avg > float32(timeThreshold) {
+			continue
+		}
+
+		allBelowThreshold = false
+		if minTtl > data.avg {
+			minTtl = data.avg
+			recommendIndex = index
+		}
+
+	}
+
+	// fmt.Printf("recommend index : %d\n", recommendIndex)
+
+	if allBelowThreshold {
+		fmt.Println("no recommend")
+	} else {
+		fmt.Printf("Recommend Host : %s\n", datas[recommendIndex].Host)
+	}
+
+	os.Exit(0)
+}
+
+func readHostFile(filePath string) ([]string, error) {
+	var hosts []string
+	file, err := os.Open(filePath)
+	if err != nil {
+		return hosts, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		hosts = append(hosts, scanner.Text())
+	}
+	return hosts, scanner.Err()
+
+}
+
+func pingHost(host string, count int, ch chan StasticData) {
 	stasticData := sendICMPPacket(host, count)
 
 	stasticData.PrintStasticData()
 
-	os.Exit(0)
+	ch <- stasticData
+
+	fmt.Println("Done", stasticData.Host)
 }
 
 func checkErr(err error) {
