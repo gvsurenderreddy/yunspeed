@@ -63,8 +63,8 @@ func (s *StasticData) PrintStasticData() {
 	}
 	s.lostPacketsRate = float32(lostPackets) / float32(s.SendedPackets) * 100
 
-	fmt.Printf("%d packets transmitted, %d received, %.1f%% packet loss\n rtt min/avg/max = %d/%.1f/%d\n",
-		s.SendedPackets, recvdPackets, s.lostPacketsRate,
+	fmt.Printf("%s %d packets transmitted, %d received, %.1f%% packet loss\n rtt min/avg/max = %d/%.1f/%d\n",
+		s.Host, s.SendedPackets, recvdPackets, s.lostPacketsRate,
 		min, s.avg, max)
 }
 
@@ -123,7 +123,7 @@ func sendICMPPacket(host string, count int) StasticData {
 		tEnd := time.Now()
 
 		duration := int32(tEnd.Sub(tNow).Nanoseconds() / (1000 * 1000))
-		fmt.Printf("from %s : time=%dms\n", addr.String(), duration)
+		fmt.Printf("from %s (%s) : time=%dms\n", host, addr.String(), duration)
 		result.DurationList.PushBack(duration)
 
 		// fmt.Println(recv)
@@ -183,9 +183,9 @@ func main() {
 
 		if allBelowThreshold {
 			minTtl = data.avg
-		}
-		allBelowThreshold = false
-		if minTtl > data.avg {
+			recommendIndex = index
+			allBelowThreshold = false
+		} else if minTtl > data.avg {
 			minTtl = data.avg
 			recommendIndex = index
 		}
@@ -227,7 +227,7 @@ func pingHost(host string, count int, ch chan StasticData) {
 
 	ch <- stasticData
 
-	fmt.Println("Done", stasticData.Host)
+	// fmt.Println("Done", stasticData.Host)
 }
 
 func checkErr(err error) {
