@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -55,7 +56,11 @@ func (s *StasticData) PrintStasticData() {
 
 	s.min = min
 	s.max = max
-	s.avg = float32(sum) / float32(recvdPackets)
+	if recvdPackets == 0 {
+		s.avg = float32(0)
+	} else {
+		s.avg = float32(sum) / float32(recvdPackets)
+	}
 	s.lostPacketsRate = float32(lostPackets) / float32(s.SendedPackets) * 100
 
 	fmt.Printf("%d packets transmitted, %d received, %.1f%% packet loss\n rtt min/avg/max = %d/%.1f/%d\n",
@@ -105,7 +110,9 @@ func sendICMPPacket(host string, count int) StasticData {
 		result.SendedPackets++
 		// fmt.Println("Send icmp packet successfully")
 
-		conn.SetReadDeadline(tNow.Add(5 * time.Second))
+		//read timeout
+		//TODO: could be configurable
+		conn.SetReadDeadline(tNow.Add(1 * time.Second))
 		recv := make([]byte, 512)
 		_, err = conn.Read(recv)
 		if err != nil {
@@ -170,10 +177,13 @@ func main() {
 
 	for index := 0; index < len(datas); index++ {
 		data := datas[index]
-		if data.avg > float32(timeThreshold) {
+		if data.avg > float32(timeThreshold) || data.avg < 1 {
 			continue
 		}
 
+		if allBelowThreshold {
+			minTtl = data.avg
+		}
 		allBelowThreshold = false
 		if minTtl > data.avg {
 			minTtl = data.avg
@@ -187,7 +197,8 @@ func main() {
 	if allBelowThreshold {
 		fmt.Println("no recommend")
 	} else {
-		fmt.Printf("Recommend Host : %s\n", datas[recommendIndex].Host)
+		fmt.Printf("Recommend Host : %s (rtt min/avg/max = %d/%.1f/%d)\n",
+			datas[recommendIndex].Host, datas[recommendIndex].min, datas[recommendIndex].avg, datas[recommendIndex].max)
 	}
 
 	os.Exit(0)
@@ -203,7 +214,7 @@ func readHostFile(filePath string) ([]string, error) {
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		hosts = append(hosts, scanner.Text())
+		hosts = append(hosts, strings.TrimSpace(scanner.Text()))
 	}
 	return hosts, scanner.Err()
 
