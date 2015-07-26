@@ -7,3 +7,6 @@ sudo yunspeed [hostFilePath]
 
 for example:
 sudo yunspeed /host/user/vpnhosts
+
+Download It in the release page:
+https://github.com/jiayanju/yunspeed/releases
